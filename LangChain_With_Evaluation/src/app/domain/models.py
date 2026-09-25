@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, AliasChoices
 
 from src.app.domain.enums import ReturnReason, Route
 
@@ -81,3 +81,42 @@ class BatchEvaluationResponse(BaseModel):
     failed: int
     results: list[EvaluationResult]
     errors: list[FailedEvaluation]
+
+
+class LabeledReturnCase(ReturnCase):
+    request_id: str = Field(
+        validation_alias=AliasChoices(
+            "request_id",
+            "order_id"
+        )
+    )
+    true_route: Route
+
+class RoutePrediction(BaseModel):
+    row_number: int
+    request_id: str
+    true_route: Route
+    predicted_route: str
+    confidence: float | None = None
+    reason: str
+
+class EvaluationScore(BaseModel):
+    system: str
+    accuracy: float
+    safety_misses: int
+    wrongful_denials: int
+    wrongful_approvals: int
+    over_escalations: int
+
+class ThresholdScore(EvaluationScore):
+    threshold: float
+    escalated_total: int
+
+class BenchmarkResponse(BaseModel):
+    total: int
+    baseline: EvaluationScore
+    predictions: list[RoutePrediction]
+    confusion_matrix: dict[str, dict[str,int]]
+    threshold_sweep: list[ThresholdScore]
+    validation_errors: list[FailedEvaluation]
+

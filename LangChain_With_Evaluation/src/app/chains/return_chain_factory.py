@@ -271,3 +271,27 @@ class ReturnChainFactory:
     def _is_genuine_defect(state: dict[str,Any]) -> bool:
         return state["route"] == "genuine_defect"
 
+    def create_router_pipeline(self) -> Runnable:
+        """
+        Create a pipeline that performs intake and routing but does not generate a customer reply.
+        This pipeline is used for offline benchmark evaluation
+        :return:
+        """
+        facts_chain = self._create_facts_chain()
+        summary_chain = self._create_summary_chain()
+
+        intake_chain = self._create_intake_chain(
+            facts_chain=facts_chain,
+            summary_chain=summary_chain,
+        )
+
+        router_chain = self._create_router_chain()
+
+        return (
+            RunnableLambda(self._validate_input)
+            | intake_chain
+            | RunnablePassthrough.assign(decision = router_chain)
+            | RunnableLambda(self._flatten_state))
+
+
+

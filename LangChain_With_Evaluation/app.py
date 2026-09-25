@@ -1,6 +1,7 @@
 # import os
 # import time
 # from functools import partial
+# from logging import exception
 #
 # import pandas as pd
 # from dotenv import load_dotenv
@@ -279,21 +280,24 @@
 #
 #
 # def flatten(state: dict) -> dict:
-#     """Pick the fields the branch (and our later checks) need out of the pipeline state"""
-#     decision = state["decision"]
+#     """Pick the fields the branch (and our later checks) need out of the pipeline state."""
+#     decision = state["decision"]                  # the router's answer (added by .assign below)
 #     return {
-#             "customer_message": state["requests"] ["customer_message"],
-#             "brief_text": state["brief_text"],
-#             "route": state["route"],
-#             "confidence" : state["confidence"],
-#             "reason" : state["reason"]}
+#         "customer_message": state["requests"]["customer_message"],
+#         "brief_text": state["brief_text"],
+#         "route": decision["route"],               # the branch reads this key to choose a path
+#         "confidence": decision["confidence"],
+#         "reason": decision["reason"],
+#     }
 #
 #
 # return_pipeline = (
-#     intake_chain | RunnablePassthrough.assign(decision = router_chain)
-#     | RunnableLambda(flatten)
-#     | RunnablePassthrough.assign(reply = branch)
+#     intake_chain                                          # chain: gate -> parallel intake -> brief
+#     | RunnablePassthrough.assign(decision=router_chain)   # router: classify, and add the result under "decision"
+#     | RunnableLambda(flatten)                             # tidy the state into the small dict the branch needs
+#     | RunnablePassthrough.assign(reply=branch)            # branch: dispatch by route, and add the result under "reply"
 # )
+#
 #
 # def show(result: dict) -> None:
 #     """Print a pipeline result in a readable way"""
@@ -307,3 +311,74 @@
 #
 # for index in [13, 1, 8]:
 #     show(return_pipeline.invoke(cases[index]))
+#
+#
+# def predict_all(chain, briefs_list, escalate_failure=False):
+#     """Run 'chain over every saved brief. Requests that failed earlier (or fail here) are kept,
+#     not dropped"""
+#     failure_route = "human_review" if escalate_failure else None
+#
+#     ok = [i for i, b in enumerate(briefs_list) if not isinstance(b, Exception)]
+#     outputs = chain.batch([briefs_list[i] for i in ok], config = {"max_concurrency": 5}, return_exceptions = True)
+#
+#     results = [
+#         {
+#             "route" : failure_route or "intake_error", "confidence" : None, "reason" : "intake gate stopped this request"
+#         }
+#         for _ in  briefs_list
+#
+#     ]
+#
+#     for i, out in zip(ok, outputs):
+#         results[i] = out if isinstance(out, dict) else {
+#             "route" : failure_route or "route_error", "confidence" : None, "reason" : str(out)
+#
+#         }
+#
+#     return results
+#
+# def summarise(name, true, results):
+#     """One scoreboard row: accuracy plus the four kinds of cost"""
+#
+#     n = len(true)
+#     pred = [r["route"] for r in results]
+#     pairs = list(zip(true, pred))
+#     return {
+#         "system": name,
+#         "accuracy": round(sum(t == p for t, p in pairs) / n ,2),
+#         "safety_misses": sum(t == "human_review" and p != "human_review" for t, p in pairs),
+#         "wrongful_denials" : sum(t == "genuine_defect" and p == "policy_violation" for t, p in pairs),
+#         "wrongful_approvals" : sum(t == "policy_violation" and p == "genuine_defect" for t, p in pairs),
+#         "over_escalations": sum(t != "human_review" and p == "human_review" for t, p in pairs)
+#     }
+#
+# baseline = predict_all(router_chain, briefs)
+#
+# scoreboard = [summarise("Router alone", true_routes, baseline)]
+# pd.DataFrame(scoreboard).to_csv("scoreboard.csv")
+#
+# pd.crosstab(pd.Series(true_routes, name = "true routes"), pd.Series([r["route"] for r in baseline], name = "router said"))
+#
+#
+# def apply_threshold(results, threshold):
+#     """Escalate anything the router was not confident about (or that failed outright)."""
+#
+#     out = []
+#     for r in results:
+#         if r["confidence"] is None or r["confidence"] < threshold:
+#             out.append({**r , "route" : "human_review",
+#                         "reason" : f"escalated: confidence {r['confidence']} is below {threshold}"})
+#         else:
+#             out.append(r)
+#     return out
+#
+# sweep_rows = []
+# for threshold in [0.5, 0.6, 0.7, 0.8, 0.9, 0.95]:
+#     adjusted = apply_threshold(baseline, threshold)
+#     row = summarise(f"threshold {threshold}", true_routes, adjusted)
+#     row["threshold"] = threshold
+#     row["escalated_total"] = sum(r["route"]  == "human_review" for r in adjusted)
+#     sweep_rows.append(row)
+#
+# sweep = pd.DataFrame(sweep_rows).set_index("threshold").drop(columns=["system"])
+# print(sweep)
